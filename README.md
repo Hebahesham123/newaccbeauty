@@ -111,6 +111,28 @@ password: Admin@12345
     lib/          ← supabase clients, types, reports (الحسابات), data hooks, csv, format
 ```
 
+## 🖼 تضمين النظام داخل لوحة أدمن أخرى (Embedding)
+
+لتشغيل هذا النظام داخل `<iframe>` في تطبيق أدمن آخر:
+
+1. في متغيّرات البيئة (Vercel) اضبط النطاق المسموح له بالتضمين:
+   ```
+   FRAME_ANCESTORS='self' https://your-admin-domain.com
+   NEXT_PUBLIC_EMBED=true
+   ```
+   - `FRAME_ANCESTORS` يُرسَل كترويسة `Content-Security-Policy: frame-ancestors …`
+     (ولا نرسل `X-Frame-Options` كي لا يمنع التضمين).
+   - `NEXT_PUBLIC_EMBED=true` يجعل كوكيز الجلسة `SameSite=None; Secure` لتعمل عبر المواقع.
+2. أعِد النشر (Redeploy).
+3. في الأدمن ضع: `<iframe src="https://accountingnew.vercel.app" …></iframe>`.
+
+**تنبيهات مهمة:**
+- يجب أن يكون كلا الموقعين على **HTTPS**.
+- المتصفحات الحديثة تحجب كوكيز الطرف الثالث؛ الأكثر موثوقية أن يكون النظام على
+  **نطاق فرعي من الأدمن** (مثل `accounting.your-admin.com`) ليُعامل كنفس الموقع،
+  أو الاعتماد على متصفحات تدعم الكوكيز المُجزّأة (CHIPS/Partitioned).
+- إن لم تُضمّن النظام، اترك `NEXT_PUBLIC_EMBED` فارغاً (الوضع الافتراضي الأكثر أماناً).
+
 ## ملاحظات
 - الصلاحيات (RLS) مفعّلة: أي مستخدم مسجّل يقرأ/يكتب الدفاتر؛ المدير يدير المستخدمين.
   يمكن لاحقاً تضييقها لكل كيان حسب المالك.

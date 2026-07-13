@@ -1,5 +1,6 @@
 "use client";
 import { createBrowserClient } from "@supabase/ssr";
+import { authCookieOptions } from "./cookieOptions";
 
 // Fallbacks keep the production BUILD from crashing when env vars are not
 // inlined yet. At runtime in the browser the real NEXT_PUBLIC_* values are used.
@@ -11,7 +12,7 @@ let _client: ReturnType<typeof createBrowserClient> | null = null;
 
 export function supabaseBrowser() {
   if (_client) return _client;
-  _client = createBrowserClient(URL, ANON);
+  _client = createBrowserClient(URL, ANON, authCookieOptions ? { cookieOptions: authCookieOptions } : undefined);
   return _client;
 }
 

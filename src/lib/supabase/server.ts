@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { authCookieOptions } from "./cookieOptions";
 
 export function supabaseServer() {
   const cookieStore = cookies();
@@ -7,6 +8,7 @@ export function supabaseServer() {
     process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co",
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-anon-key",
     {
+      ...(authCookieOptions ? { cookieOptions: authCookieOptions } : {}),
       cookies: {
         getAll() {
           return cookieStore.getAll();
