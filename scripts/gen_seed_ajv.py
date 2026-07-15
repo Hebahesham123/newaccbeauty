@@ -117,11 +117,16 @@ def num(x):
         return "0"
 
 
+# Known date typos in the source workbook -> corrected date.
+# The 8 vouchers stamped 2026-06-25 sit between Feb 24 and Feb 26 in the
+# sheet: '06' was typed for '02'. This is Jan/Feb/March data, so fix them.
+DATE_FIXES = {"2026-06-25": "2026-02-25"}
+
+
 def as_date(v, fallback):
-    if isinstance(v, datetime.datetime):
-        return v.strftime("%Y-%m-%d")
-    if isinstance(v, datetime.date):
-        return v.strftime("%Y-%m-%d")
+    if isinstance(v, (datetime.datetime, datetime.date)):
+        s = v.strftime("%Y-%m-%d")
+        return DATE_FIXES.get(s, s)
     return fallback
 
 
