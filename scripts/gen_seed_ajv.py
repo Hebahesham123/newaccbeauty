@@ -15,11 +15,12 @@ The workbook has two sheets:
 Output: supabase/seed.sql - wipes the current books, then inserts a fresh
 entity, the chart-of-accounts tree, and every voucher as a journal entry.
 """
-import os, io, datetime
+import os, io, sys, datetime
 import openpyxl
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-XLSX = os.path.join(ROOT, "2026 ceck out.xlsx")
+# Source workbook: pass a path as argv[1] to override; defaults to the full Q1 file.
+XLSX = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "2026 ceck out - 1QUARTER.xlsx")
 OUT  = os.path.join(ROOT, "supabase", "seed.sql")
 
 ENTITY_ID   = "11111111-1111-1111-1111-111111111111"
@@ -208,7 +209,7 @@ def main():
     out = io.StringIO()
     w = out.write
     w("-- ============================================================\n")
-    w("-- AUTO-GENERATED SEED from '2026 ceck out.xlsx'. Run AFTER schema.sql\n")
+    w(f"-- AUTO-GENERATED SEED from '{os.path.basename(XLSX)}'. Run AFTER schema.sql\n")
     w("-- Wipes the existing books, then loads the new chart of accounts\n")
     w("-- and every voucher from the American journal voucher sheet.\n")
     w("-- ============================================================\n")
