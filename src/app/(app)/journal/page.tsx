@@ -10,6 +10,14 @@ import { Button, Input, Card, Spinner } from "@/components/ui";
 import { PageHeader } from "@/components/ReportToolbar";
 import type { LedgerRow } from "@/lib/types";
 
+/** Local calendar date as YYYY-MM-DD (matches how entry.date is stored). */
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate()
+  ).padStart(2, "0")}`;
+}
+
 export default function JournalPage() {
   const { entity } = useEntity();
   const entityId = entity?.id ?? null;
@@ -19,6 +27,9 @@ export default function JournalPage() {
   const [totals, setTotals] = useState<Map<string, number>>(new Map());
   const [totalsLoading, setTotalsLoading] = useState(true);
   const [search, setSearch] = useState("");
+  // Date filter — defaults to today; widen `to` for a range, or clear both for all.
+  const [from, setFrom] = useState<string>(() => todayStr());
+  const [to, setTo] = useState<string>(() => todayStr());
 
   useEffect(() => {
     let cancelled = false;
@@ -50,14 +61,21 @@ export default function JournalPage() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return entries;
-    return entries.filter(
-      (e) =>
-        String(e.entry_no).includes(q) ||
-        (e.description ?? "").toLowerCase().includes(q) ||
-        (e.ref_no ?? "").toLowerCase().includes(q)
-    );
-  }, [entries, search]);
+    return entries.filter((e) => {
+      if (from && e.date < from) return false;
+      if (to && e.date > to) return false;
+      if (
+        q &&
+        !(
+          String(e.entry_no).includes(q) ||
+          (e.description ?? "").toLowerCase().includes(q) ||
+          (e.ref_no ?? "").toLowerCase().includes(q)
+        )
+      )
+        return false;
+      return true;
+    });
+  }, [entries, search, from, to]);
 
   const grandTotal = useMemo(
     () => filtered.reduce((s, e) => s + (totals.get(e.id) ?? 0), 0),
@@ -97,13 +115,42 @@ export default function JournalPage() {
       </PageHeader>
 
       <Card>
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div className="w-64">
-            <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="بحث برقم القيد أو البيان…"
-            />
+        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="w-56">
+              <span className="mb-1 block text-xs font-semibold text-slate-500">بحث</span>
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="بحث برقم القيد أو البيان…"
+              />
+            </div>
+            <label className="text-sm">
+              <span className="mb-1 block text-xs font-semibold text-slate-500">من تاريخ</span>
+              <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} dir="ltr" />
+            </label>
+            <label className="text-sm">
+              <span className="mb-1 block text-xs font-semibold text-slate-500">إلى تاريخ</span>
+              <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} dir="ltr" />
+            </label>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setFrom(todayStr());
+                setTo(todayStr());
+              }}
+            >
+              اليوم
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setFrom("");
+                setTo("");
+              }}
+            >
+              كل التواريخ
+            </Button>
           </div>
           <div className="text-sm text-slate-600">
             عدد القيود: <span className="num font-semibold">{filtered.length}</span>
