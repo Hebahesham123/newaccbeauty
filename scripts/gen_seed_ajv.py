@@ -15,13 +15,30 @@ The workbook has two sheets:
 Output: supabase/seed.sql - wipes the current books, then inserts a fresh
 entity, the chart-of-accounts tree, and every voucher as a journal entry.
 """
-import os, io, sys, datetime
+import os, io, datetime
 import openpyxl
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# Source workbook: pass a path as argv[1] to override; defaults to the full Q1 file.
-XLSX = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "2026 ceck out - 1QUARTER.xlsx")
 OUT  = os.path.join(ROOT, "supabase", "seed.sql")
+
+# Source workbooks, loaded in order into one continuous journal (Jan -> Jun 2026).
+# Each source may carry date-typo fixes specific to that file:
+#   date_fixes     : corrected ISO date  keyed by the raw ISO date openpyxl read
+#   str_date_fixes : corrected ISO date  keyed by a raw TEXT date cell (parse fails)
+SOURCES = [
+    {
+        "path": os.path.join(ROOT, "2026 ceck out - 1QUARTER.xlsx"),
+        # 8 vouchers stamped 2026-06-25 sit between Feb 24 and Feb 26: '06' typed for '02'.
+        "date_fixes": {"2026-06-25": "2026-02-25"},
+        "str_date_fixes": {},
+    },
+    {
+        "path": os.path.join(ROOT, "Quarter 2.xlsx"),
+        "date_fixes": {},
+        # Two June-13 vouchers have malformed text dates (double slash; one year typo'd 2028).
+        "str_date_fixes": {"13/6//2026": "2026-06-13", "13/6//2028": "2026-06-13"},
+    },
+]
 
 ENTITY_ID   = "11111111-1111-1111-1111-111111111111"
 ENTITY_NAME = "الشركة الرئيسية"
@@ -56,6 +73,11 @@ CLASSIFY = [
     ("Advance to employees",    "asset",     "Other Current Assets"),
     ("سلف",                     "asset",     "Other Current Assets"),
     ("Opreation",               "asset",     "Other Current Assets"),
+    # ---- new bank/payment accounts introduced in Q2 ----
+    ("Bank VISA",               "asset",     "Cash & Equivalents"),
+    ("MONTERE",                 "asset",     "Cash & Equivalents"),
+    ("ALEXBANK",                "asset",     "Cash & Equivalents"),
+    ("ALEXBANK -INTEREST ACCOUNT", "asset",  "Cash & Equivalents"),
     # ---- Balance sheet: liabilities ----
     ("Suppliers",               "liability", "Payables"),
     ("deposits revenue",        "liability", "Payables"),
@@ -117,24 +139,21 @@ def num(x):
         return "0"
 
 
-# Known date typos in the source workbook -> corrected date.
-# The 8 vouchers stamped 2026-06-25 sit between Feb 24 and Feb 26 in the
-# sheet: '06' was typed for '02'. This is Jan/Feb/March data, so fix them.
-DATE_FIXES = {"2026-06-25": "2026-02-25"}
+def resolve_date(raw, date_fixes, str_date_fixes):
+    """Return an ISO date string for a voucher row, or None if it isn't a voucher."""
+    if isinstance(raw, (datetime.datetime, datetime.date)):
+        s = raw.strftime("%Y-%m-%d")
+        return date_fixes.get(s, s)
+    if isinstance(raw, str):
+        return str_date_fixes.get(raw.strip())  # only rescue known text-date typos
+    return None
 
 
-def as_date(v, fallback):
-    if isinstance(v, (datetime.datetime, datetime.date)):
-        s = v.strftime("%Y-%m-%d")
-        return DATE_FIXES.get(s, s)
-    return fallback
-
-
-def parse_journal(acc):
-    wb = openpyxl.load_workbook(XLSX, read_only=True, data_only=True)
+def parse_source(src, acc):
+    """Parse one workbook's voucher sheet into a list of entry dicts."""
+    wb = openpyxl.load_workbook(src["path"], read_only=True, data_only=True)
     ws = wb["American journal voucher"]
-    rows = ws.iter_rows(values_only=True)
-    all_rows = list(rows)
+    all_rows = list(ws.iter_rows(values_only=True))
     wb.close()
 
     # header row (0-based index 2 == Excel row 3): map account name -> column C
@@ -145,26 +164,22 @@ def parse_journal(acc):
         if nm in acc:
             name_to_col[nm] = c  # credit at c, debit at c+1
 
-    missing = set(acc) - set(name_to_col)
-    if missing:
-        print("WARNING: accounts not found in voucher header:", missing)
-
-    entries = []   # {ref, date, desc, lines: [(name, debit, credit)]}
-    last_date = "2026-01-01"
+    entries = []
     tot_d = tot_c = 0.0
+    date_fixes = src.get("date_fixes", {})
+    str_date_fixes = src.get("str_date_fixes", {})
 
     # data starts after the Credit/Debit sub-header (Excel row 4 == index 3).
-    # Only rows carrying a REAL date are vouchers; the footer "Total" row and
-    # the blank "op" row have no date and must be skipped (they would otherwise
-    # double every column, since the footer repeats each column's grand total).
+    # Only rows with a resolvable date are vouchers; the footer "Total" row and
+    # blank rows carry no date and are skipped (the footer would otherwise double
+    # every column, since it repeats each column's grand total).
     for r in all_rows[4:]:
         if r is None:
             continue
-        raw_date = r[1] if len(r) > 1 else None
-        if not isinstance(raw_date, (datetime.datetime, datetime.date)):
+        date = resolve_date(r[1] if len(r) > 1 else None, date_fixes, str_date_fixes)
+        if date is None:
             continue
         ref = r[0] if len(r) > 0 else None
-        date = as_date(raw_date, None)
         desc = norm_name(r[2] if len(r) > 2 else None)
 
         lines = []
@@ -182,16 +197,25 @@ def parse_journal(acc):
         if not lines:
             continue  # opening/blank rows carry no postings
 
-        use_date = date or last_date
-        if date:
-            last_date = date
         entries.append({
             "ref": str(int(ref)) if isinstance(ref, (int, float)) else norm_name(ref),
-            "date": use_date,
+            "date": date,
             "desc": desc,
             "lines": lines,
         })
 
+    return entries, tot_d, tot_c
+
+
+def parse_journal(acc):
+    """Load every source workbook into one continuous, chronologically-ordered journal."""
+    entries, tot_d, tot_c = [], 0.0, 0.0
+    for src in SOURCES:
+        e, d, c = parse_source(src, acc)
+        print(f"  {os.path.basename(src['path'])}: {len(e)} vouchers")
+        entries.extend(e)
+        tot_d += d
+        tot_c += c
     return entries, tot_d, tot_c
 
 
@@ -214,9 +238,12 @@ def main():
     out = io.StringIO()
     w = out.write
     w("-- ============================================================\n")
-    w(f"-- AUTO-GENERATED SEED from '{os.path.basename(XLSX)}'. Run AFTER schema.sql\n")
-    w("-- Wipes the existing books, then loads the new chart of accounts\n")
-    w("-- and every voucher from the American journal voucher sheet.\n")
+    w("-- AUTO-GENERATED SEED. Run AFTER schema.sql\n")
+    w("-- Sources (loaded in order into one Jan->Jun 2026 journal):\n")
+    for src in SOURCES:
+        w(f"--   * {os.path.basename(src['path'])}\n")
+    w("-- Wipes the existing books, then loads the chart of accounts and\n")
+    w("-- every voucher from the American journal voucher sheets.\n")
     w("-- ============================================================\n")
     w("begin;\n\n")
 
