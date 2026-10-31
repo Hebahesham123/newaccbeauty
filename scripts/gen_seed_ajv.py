@@ -1,16 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-Generate supabase/seed.sql from '2026 ceck out.xlsx'.
+Generate supabase/seed.sql from the source workbook(s).
 
-The workbook has two sheets:
-  * 'American journal voucher' - a matrix voucher. Row 3 is the header
-    (Ref, Date, Description, Net, Total, then one account name every 2 cols).
-    Row 4 is the Credit/Debit sub-header. For an account whose NAME sits at
-    0-based column C:  credit = row[C],  debit = row[C+1].
-    Each subsequent row is ONE journal voucher.
-  * 'Trial balance' - the 34 accounts, each tagged 2 = الميزانية (balance
-    sheet) or 1 = قائمة دخل (income statement). Used only for reference; the
-    financial-statement classification below was reviewed and approved.
+Each workbook has a matrix-voucher sheet plus a 'Trial balance' sheet:
+  * voucher sheet - Row 3 is the header (Ref, Date, Description, Net, Total,
+    then one account name every 2 cols). Row 4 is the Credit/Debit sub-header.
+    For an account whose NAME sits at 0-based column C: credit = row[C],
+    debit = row[C+1]. Each subsequent row is ONE journal voucher. An opening
+    row (Description 'op', whose Date cell is a bare time) carries the opening
+    balances and is loaded as the first entry, dated `opening_date`.
+  * 'Trial balance' - per-account totals; used to verify the import reconciles.
 
 Output: supabase/seed.sql - wipes the current books, then inserts a fresh
 entity, the chart-of-accounts tree, and every voucher as a journal entry.
@@ -21,20 +20,20 @@ import openpyxl
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT  = os.path.join(ROOT, "supabase", "seed.sql")
 
-# Source workbooks, loaded in order into one continuous journal (Jan -> Jun 2026).
-# Each source may carry date-typo fixes specific to that file:
-#   date_fixes     : corrected ISO date  keyed by the raw ISO date openpyxl read
-#   str_date_fixes : corrected ISO date  keyed by a raw TEXT date cell (parse fails)
+# Source workbooks, loaded in order into one continuous journal.
+# Per-source options:
+#   sheet              : voucher sheet name (default 'American journal voucher')
+#   str_date_fixes     : corrected ISO date keyed by a raw TEXT date cell (parse fails)
+#   opening_date       : date to stamp the 'op' opening-balance row (if present)
+#   fix_jun25_feb_typo : remap 2026-06-25 -> 2026-02-25 ONLY for rows that appear
+#                        before the March block (8 Feb vouchers were stamped '06'
+#                        for '02'); real June-25 rows, which come after, are kept.
 SOURCES = [
     {
-        "path": os.path.join(ROOT, "2026 ceck out - 1QUARTER.xlsx"),
-        # 8 vouchers stamped 2026-06-25 sit between Feb 24 and Feb 26: '06' typed for '02'.
-        "date_fixes": {"2026-06-25": "2026-02-25"},
-        "str_date_fixes": {},
-    },
-    {
-        "path": os.path.join(ROOT, "Quarter 2.xlsx"),
-        "date_fixes": {},
+        "path": os.path.join(ROOT, "من 1 ل 9.xlsx"),
+        "sheet": "100",
+        "opening_date": "2026-01-01",
+        "fix_jun25_feb_typo": True,
         # Two June-13 vouchers have malformed text dates (double slash; one year typo'd 2028).
         "str_date_fixes": {"13/6//2026": "2026-06-13", "13/6//2028": "2026-06-13"},
     },
@@ -78,6 +77,10 @@ CLASSIFY = [
     ("MONTERE",                 "asset",     "Cash & Equivalents"),
     ("ALEXBANK",                "asset",     "Cash & Equivalents"),
     ("ALEXBANK -INTEREST ACCOUNT", "asset",  "Cash & Equivalents"),
+    ("insta pay 3",             "asset",     "Cash & Equivalents"),
+    # ---- new accounts introduced in the Jan-Sep workbook ----
+    ("other DEBTORS",           "asset",     "Other Current Assets"),
+    ("Bueaty bar intarnational","asset",     "Other Current Assets"),
     # ---- Balance sheet: liabilities ----
     ("Suppliers",               "liability", "Payables"),
     ("deposits revenue",        "liability", "Payables"),
@@ -139,20 +142,10 @@ def num(x):
         return "0"
 
 
-def resolve_date(raw, date_fixes, str_date_fixes):
-    """Return an ISO date string for a voucher row, or None if it isn't a voucher."""
-    if isinstance(raw, (datetime.datetime, datetime.date)):
-        s = raw.strftime("%Y-%m-%d")
-        return date_fixes.get(s, s)
-    if isinstance(raw, str):
-        return str_date_fixes.get(raw.strip())  # only rescue known text-date typos
-    return None
-
-
 def parse_source(src, acc):
     """Parse one workbook's voucher sheet into a list of entry dicts."""
     wb = openpyxl.load_workbook(src["path"], read_only=True, data_only=True)
-    ws = wb["American journal voucher"]
+    ws = wb[src.get("sheet", "American journal voucher")]
     all_rows = list(ws.iter_rows(values_only=True))
     wb.close()
 
@@ -166,21 +159,39 @@ def parse_source(src, acc):
 
     entries = []
     tot_d = tot_c = 0.0
-    date_fixes = src.get("date_fixes", {})
     str_date_fixes = src.get("str_date_fixes", {})
+    opening_date = src.get("opening_date")
+    fix_jun25 = src.get("fix_jun25_feb_typo", False)
+    seen_march = False  # once March rows appear, any 2026-06-25 is a real June date
 
     # data starts after the Credit/Debit sub-header (Excel row 4 == index 3).
-    # Only rows with a resolvable date are vouchers; the footer "Total" row and
-    # blank rows carry no date and are skipped (the footer would otherwise double
-    # every column, since it repeats each column's grand total).
+    # Only rows carrying a resolvable date are vouchers (plus the 'op' opening
+    # row); the footer "Total" and blank rows carry none and are skipped.
     for r in all_rows[4:]:
         if r is None:
             continue
-        date = resolve_date(r[1] if len(r) > 1 else None, date_fixes, str_date_fixes)
+        raw = r[1] if len(r) > 1 else None
+        desc = norm_name(r[2] if len(r) > 2 else None)
+
+        date = None
+        if isinstance(raw, (datetime.datetime, datetime.date)):
+            date = raw.strftime("%Y-%m-%d")
+            if date.startswith("2026-03"):
+                seen_march = True
+            if fix_jun25 and date == "2026-06-25" and not seen_march:
+                date = "2026-02-25"  # Feb voucher mis-stamped '06' for '02'
+        elif isinstance(raw, str) and raw.strip() in str_date_fixes:
+            date = str_date_fixes[raw.strip()]
+        elif desc == "op" and opening_date:
+            date = opening_date  # opening-balance row (Date cell is a bare time)
         if date is None:
             continue
+
         ref = r[0] if len(r) > 0 else None
-        desc = norm_name(r[2] if len(r) > 2 else None)
+        if desc == "op":
+            desc = "Opening balance"
+            if ref is None:
+                ref = "OP"
 
         lines = []
         for nm, c in name_to_col.items():
@@ -195,7 +206,7 @@ def parse_source(src, acc):
             tot_c += cv
 
         if not lines:
-            continue  # opening/blank rows carry no postings
+            continue  # blank rows carry no postings
 
         entries.append({
             "ref": str(int(ref)) if isinstance(ref, (int, float)) else norm_name(ref),
@@ -239,11 +250,11 @@ def main():
     w = out.write
     w("-- ============================================================\n")
     w("-- AUTO-GENERATED SEED. Run AFTER schema.sql\n")
-    w("-- Sources (loaded in order into one Jan->Jun 2026 journal):\n")
+    w("-- Sources (loaded in order into one continuous journal):\n")
     for src in SOURCES:
         w(f"--   * {os.path.basename(src['path'])}\n")
     w("-- Wipes the existing books, then loads the chart of accounts and\n")
-    w("-- every voucher from the American journal voucher sheets.\n")
+    w("-- every voucher (incl. the opening-balance entry) from the sources.\n")
     w("-- ============================================================\n")
     w("begin;\n\n")
 
