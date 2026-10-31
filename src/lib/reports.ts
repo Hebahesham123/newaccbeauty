@@ -111,13 +111,36 @@ export interface StatementLine {
   amount: number;
 }
 export interface IncomeStatement {
+  // legacy flat view (kept for the dashboard & balance sheet)
   revenues: StatementLine[];
   expenses: StatementLine[];
   totalRevenue: number;
   totalExpense: number;
   netIncome: number;
+  // structured view that matches the owner's قائمة الدخل:
+  //   Sales − Discount = Net Sales − Cost = Gross Profit − OpEx = Operating
+  //   Profit + Other Income = Net Profit
+  revenue: StatementLine[]; // gross revenue (Revenue group)
+  grossRevenue: number;
+  contra: StatementLine[]; // discounts etc. (shown negative)
+  netSales: number;
+  cogs: StatementLine[];
+  totalCogs: number;
+  grossProfit: number;
+  opex: StatementLine[];
+  totalOpex: number;
+  operatingProfit: number;
+  otherIncome: StatementLine[];
+  totalOtherIncome: number;
+  netProfit: number;
 }
 
+// Group names (set by the seed) that get special placement in the statement.
+const CONTRA_REVENUE_GROUP = "Contra Revenue";
+const OTHER_INCOME_GROUP = "Other Income";
+const COGS_GROUP = "Cost of Sales";
+
+/** Per-group totals for a category (sign applied to debit-credit). Legacy flat view. */
 function groupSum(rows: LedgerRow[], cat: ReportCategory, sign: 1 | -1): StatementLine[] {
   const map = new Map<string, number>();
   for (const r of rows) {
@@ -131,13 +154,76 @@ function groupSum(rows: LedgerRow[], cat: ReportCategory, sign: 1 | -1): Stateme
     .sort((a, b) => b.amount - a.amount);
 }
 
+/** Per-account lines for a category, each tagged with its group (for section buckets). */
+function acctLines(rows: LedgerRow[], cat: ReportCategory, sign: 1 | -1) {
+  const map = new Map<string, { label: string; group: string; amount: number }>();
+  for (const r of rows) {
+    if (r.report_category !== cat) continue;
+    let a = map.get(r.account_id);
+    if (!a) {
+      a = { label: r.account_name, group: r.group_name || "", amount: 0 };
+      map.set(r.account_id, a);
+    }
+    a.amount += sign * (r.debit - r.credit);
+  }
+  return [...map.entries()]
+    .map(([key, v]) => ({ key, label: v.label, group: v.group, amount: v.amount }))
+    .filter((l) => Math.abs(l.amount) > 0.005);
+}
+
 export function incomeStatement(rows: LedgerRow[]): IncomeStatement {
   // income normal = credit-debit (sign -1 on debit-credit); expense normal = debit-credit (sign +1)
+  const inc = acctLines(rows, "income", -1);
+  const exp = acctLines(rows, "expense", 1);
+  const strip = (l: { key: string; label: string; amount: number }) => ({
+    key: l.key,
+    label: l.label,
+    amount: l.amount,
+  });
+
+  const revenue = inc.filter((l) => l.group !== CONTRA_REVENUE_GROUP && l.group !== OTHER_INCOME_GROUP).map(strip).sort((a, b) => b.amount - a.amount);
+  const contra = inc.filter((l) => l.group === CONTRA_REVENUE_GROUP).map(strip).sort((a, b) => a.amount - b.amount);
+  const otherIncome = inc.filter((l) => l.group === OTHER_INCOME_GROUP).map(strip).sort((a, b) => b.amount - a.amount);
+  const cogs = exp.filter((l) => l.group === COGS_GROUP).map(strip).sort((a, b) => b.amount - a.amount);
+  const opex = exp.filter((l) => l.group !== COGS_GROUP).map(strip).sort((a, b) => b.amount - a.amount);
+
+  const sum = (ls: StatementLine[]) => ls.reduce((s, l) => s + l.amount, 0);
+  const grossRevenue = sum(revenue);
+  const totalContra = sum(contra); // negative
+  const netSales = grossRevenue + totalContra;
+  const totalCogs = sum(cogs);
+  const grossProfit = netSales - totalCogs;
+  const totalOpex = sum(opex);
+  const operatingProfit = grossProfit - totalOpex;
+  const totalOtherIncome = sum(otherIncome);
+  const netProfit = operatingProfit + totalOtherIncome;
+
+  // legacy flat view
   const revenues = groupSum(rows, "income", -1);
   const expenses = groupSum(rows, "expense", 1);
   const totalRevenue = revenues.reduce((s, l) => s + l.amount, 0);
   const totalExpense = expenses.reduce((s, l) => s + l.amount, 0);
-  return { revenues, expenses, totalRevenue, totalExpense, netIncome: totalRevenue - totalExpense };
+
+  return {
+    revenues,
+    expenses,
+    totalRevenue,
+    totalExpense,
+    netIncome: totalRevenue - totalExpense,
+    revenue,
+    grossRevenue,
+    contra,
+    netSales,
+    cogs,
+    totalCogs,
+    grossProfit,
+    opex,
+    totalOpex,
+    operatingProfit,
+    otherIncome,
+    totalOtherIncome,
+    netProfit,
+  };
 }
 
 // ---- Balance Sheet -----------------------------------------------------------

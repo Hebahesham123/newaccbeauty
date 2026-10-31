@@ -81,11 +81,13 @@ CLASSIFY = [
     # ---- new accounts introduced in the Jan-Sep workbook ----
     ("other DEBTORS",           "asset",     "Other Current Assets"),
     ("Bueaty bar intarnational","asset",     "Other Current Assets"),
+    # Refund is kept OUT of the income statement (per the owner's قائمة الدخل);
+    # it sits on the balance sheet as a current asset instead of an expense.
+    ("Refund",                  "asset",     "Other Current Assets"),
     # ---- Balance sheet: liabilities ----
     ("Suppliers",               "liability", "Payables"),
     ("deposits revenue",        "liability", "Payables"),
     ("Purchasing",              "liability", "Payables"),
-    ("Bank interest cr",        "liability", "Payables"),
     # ---- Balance sheet: equity ----
     ("Capital",                 "equity",    "Equity"),
     ("Share holder's",          "equity",    "Equity"),
@@ -93,6 +95,8 @@ CLASSIFY = [
     ("p&l",                     "equity",    "Equity"),
     # ---- Income statement: income ----
     ("Sales",                   "income",    "Revenue"),
+    ("Discount",                "income",    "Contra Revenue"),   # deducted to reach Net Sales
+    ("Bank interest cr",        "income",    "Other Income"),     # Bank Interest Income
     # ---- Income statement: expenses ----
     ("Cost",                    "expense",   "Cost of Sales"),
     ("Administrative Expenses", "expense",   "Admin Expenses"),
@@ -100,8 +104,6 @@ CLASSIFY = [
     ("Markting",                "expense",   "Operating Expenses"),
     ("Depreciation",            "expense",   "Operating Expenses"),
     ("other Ep",                "expense",   "Operating Expenses"),
-    ("Discount",                "expense",   "Discounts & Refunds"),
-    ("Refund",                  "expense",   "Discounts & Refunds"),
 ]
 
 # account codes, numbered per category
